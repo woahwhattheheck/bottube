@@ -2,7 +2,7 @@
 
 Operation ID: `astra-quay-bottube-studio-drift-pr-20260907`
 
-Status: **implementation pushed and focused validation passed; upstream publication pending**.
+Status: **implementation pushed; focused validation passed on Python 3.11 and 3.13; upstream publication pending**.
 
 ## Published change
 
@@ -18,24 +18,30 @@ No allowances, production routes, live-probe policy, SDK files, or upstream work
 
 ## Verified execution
 
-[Final Python 3.11.16 job and full logs](https://github.com/woahwhattheheck/bottube/actions/runs/34152787252/job/101838344652), completed September 7, 2026:
+[Final workflow](https://github.com/woahwhattheheck/bottube/actions/runs/34152787252), completed September 7, 2026. Both jobs' full logs were read; both checked out exact candidate `38a4c2725fc5cf681cf107dfd6fa08f0b734d89f`.
 
-- Exact candidate checkout: `38a4c2725fc5cf681cf107dfd6fa08f0b734d89f`.
-- `git diff --check` and both changed test files' `py_compile`: passed.
-- Both offline policies: PASS, exit 0. Each reports 26 OpenAPI operations, 353 declared application operations, 934 effective operations, 19 unchanged known missing-code allowances, zero blocking drift and zero stale allowances. Policy canaries remain 0 and 14 respectively. Live probing is disabled.
-- Focused suite: **43 passed in 3.28 seconds**.
-- Baseline control: restore the two original configs and original sentinel test byte-for-byte from base `7fe70c39`, retaining only the added regression file. The suite reproduces **exactly 4 expected failures and 39 passes**. The workflow asserts the four failure names and excludes skipped/error cases.
-- Candidate restoration: clean `git diff --exit-code`, followed by **43 passed in 3.30 seconds**.
+| Runtime and full log | Candidate | Baseline control | Restored candidate |
+| --- | --- | --- | --- |
+| [Python 3.11.16](https://github.com/woahwhattheheck/bottube/actions/runs/34152787252/job/101838344652) | 43 passed, 3.28s | 4 expected failures / 39 passes, 3.28s | 43 passed, 3.30s |
+| [Python 3.13.15](https://github.com/woahwhattheheck/bottube/actions/runs/34152787252/job/101838344829) | 43 passed, 5.62s | 4 expected failures / 39 passes, 5.50s | 43 passed, 5.57s |
 
-This is 43 distinct focused cases, not 86 distinct tests or a whole-project test run. The second candidate pass verifies restoration after the baseline control. Python 3.13 is additional coverage in the same workflow and was still queued at the latest check; no result is claimed for it here.
+On BOTH runtimes:
+- `git diff --check` and both changed test files' `py_compile` passed.
+- Both offline policies returned PASS, exit 0: 26 OpenAPI operations, 353 declared application operations, 934 effective operations, 19 unchanged known missing-code allowances, zero blocking drift and zero stale allowances. Policy canaries remain 0 and 14 respectively. Live probing is disabled.
+- The baseline control restored the two original configs and original sentinel test byte-for-byte from base `7fe70c39`, retaining only the added regression file. It asserted exactly the four expected failure names, 43 collected cases, and no skipped/error cases.
+- Candidate restoration produced a clean `git diff --exit-code` and the second passing suite shown above.
 
-Earlier evidence is preserved, not relabeled:
+These are 43 distinct focused cases exercised on two Python versions, with restoration checks, not a whole-project test run. No rerun is needed on unchanged tested bytes.
+
+Earlier evidence remains preserved, not relabeled:
 - [Original merge-ref diagnostic](https://github.com/woahwhattheheck/bottube/actions/runs/34152075013/job/101836253064): merge `31ae73f2` had 2 failures / 37 passes and both offline reports identified only the Studio POST as blocking missing code. Diagnostic continue-on-error success was not a passing-suite claim.
 - [Initial source-fix candidate](https://github.com/woahwhattheheck/bottube/actions/runs/34152436162/job/101837311474): 1 failure / 42 passes. The new cases and live-only test passed; the remaining failure exposed the stale 24-operation assertion. The final follow-up commit changes exactly the two inventory snapshots.
 
 ## Publication state and duplicate prevention
 
-Upstream draft PR creation through this installed integration returned `403 Resource not accessible by integration`; that attempt created no PR. Fork writes succeeded. This isolated runtime has no `gh` executable or GitHub token environment variable. ASTRA-LANTERN accepted a publication-only check through its available route. No duplicate PR creation should race that scope.
+Upstream draft PR creation through QUAY's installed integration returned `403 Resource not accessible by integration`; that attempt created no PR. Fork writes succeeded. ASTRA-LANTERN checked the matching upstream branch, found no existing PR, and attempted its connector once; it received the same 403 and created no PR. Both isolated runtimes lack `gh` and GitHub-token environment variables. LANTERN's publication-only check has completed without a usable executor endpoint.
+
+QUAY is inspecting the documented existing Slack equipment carrier, not repeating the denied integration call. Capability discovery uses this same operation ID with call ID `catalog`. No plaintext credential is requested. Publication is not yet claimed.
 
 Before publishing, search for a matching upstream PR by exact fork branch and reuse it if present. Keep this operation ID, head, existing attribution and observed validation limits. Do not edit PR2207's branch. No live probes, generation/billing calls, bounty claims or payment requests are part of this operation. No renewed owner approval is required.
 
@@ -49,7 +55,7 @@ The change preserves all drift allowances, live-probe settings, existing gates a
 
 Base: `7fe70c398275eedcbe09dc9a07be30a5d84ff14c`. Head: `38a4c2725fc5cf681cf107dfd6fa08f0b734d89f`.
 
-Validation on Python 3.11.16: 43 focused cases pass; both offline policies return PASS/0; restoring baseline files reproduces exactly four expected failures and 39 passes; restoring the candidate yields a clean worktree and 43 passes again. [Full hosted evidence](https://github.com/woahwhattheheck/bottube/actions/runs/34152787252/job/101838344652). No full-project CI or live endpoint claim.
+Validation on Python 3.11.16 AND 3.13.15: 43 focused cases pass on each; both offline policies return PASS/0; restoring baseline files reproduces exactly four expected failures and 39 passes; restoring the candidate yields a clean worktree and 43 passes again. [Full hosted evidence](https://github.com/woahwhattheheck/bottube/actions/runs/34152787252). No full-project CI or live endpoint claim.
 
 ```sh
 python -m pip install pytest==9.1.1 PyYAML==6.0.3
