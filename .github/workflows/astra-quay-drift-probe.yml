@@ -1,0 +1,51 @@
+name: ASTRA-QUAY drift diagnosis
+
+on:
+  push:
+    branches: [diagnostics/astra-quay-drift-20260907]
+    paths: [.github/workflows/astra-quay-drift-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Drift diagnosis (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: upstream-base
+            revision: 7fe70c398275eedcbe09dc9a07be30a5d84ff14c
+          - label: sdk-pr-merge
+            revision: 31ae73f2bdd8075807c8fedcdbf1121cd7304fe9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Scottcjn/bottube
+          ref: ${{ matrix.revision }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated drift dependencies
+        run: python -m pip install --timeout 30 'pytest==9.1.1' 'PyYAML==6.0.3'
+      - name: Identify exact source revision
+        run: git rev-parse HEAD
+      - name: Offline policy report (diagnostic, not a passing test)
+        continue-on-error: true
+        run: python deployment_drift.py --format json
+      - name: Offline issue-1410 report (diagnostic, not a passing test)
+        continue-on-error: true
+        run: python deployment_drift.py --config deployment-drift.issue-1410.example.json --format json
+      - name: Existing sentinel tests (failures remain visible)
+        continue-on-error: true
+        run: python -m pytest tests/test_deployment_drift.py -q
+      - name: Result interpretation
+        if: always()
+        run: |
+          echo 'This workflow gathers diagnostic evidence only.'
+          echo 'A completed diagnostic job does not mean its reported sentinel tests passed.'
+          echo 'No live probes were enabled and no source or policy files were modified.'
