@@ -1,4 +1,4 @@
-name: ASTRA-QUAY drift diagnosis
+name: ASTRA-QUAY Studio drift validation
 
 on:
   push:
@@ -9,43 +9,77 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
-    name: Drift diagnosis (${{ matrix.label }})
+  validate:
+    name: Studio drift (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - label: upstream-base
-            revision: 7fe70c398275eedcbe09dc9a07be30a5d84ff14c
-          - label: sdk-pr-merge
-            revision: 31ae73f2bdd8075807c8fedcdbf1121cd7304fe9
+        python-version: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: Scottcjn/bottube
-          ref: ${{ matrix.revision }}
+          repository: woahwhattheheck/bottube
+          ref: 6b1a4d4a297a14991796e5b8f11405df4eb71db9
+          fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
       - name: Install isolated drift dependencies
         run: python -m pip install --timeout 30 'pytest==9.1.1' 'PyYAML==6.0.3'
-      - name: Identify exact source revision
-        run: git rev-parse HEAD
-      - name: Offline policy report (diagnostic, not a passing test)
-        continue-on-error: true
-        run: python deployment_drift.py --format json
-      - name: Offline issue-1410 report (diagnostic, not a passing test)
-        continue-on-error: true
-        run: python deployment_drift.py --config deployment-drift.issue-1410.example.json --format json
-      - name: Existing sentinel tests (failures remain visible)
-        continue-on-error: true
-        run: python -m pytest tests/test_deployment_drift.py -q
-      - name: Result interpretation
-        if: always()
+      - name: Verify exact candidate and three-file diff
         run: |
-          echo 'This workflow gathers diagnostic evidence only.'
-          echo 'A completed diagnostic job does not mean its reported sentinel tests passed.'
-          echo 'No live probes were enabled and no source or policy files were modified.'
+          test "$(git rev-parse HEAD)" = 6b1a4d4a297a14991796e5b8f11405df4eb71db9
+          git diff --check HEAD^ HEAD
+          git diff --stat HEAD^ HEAD
+          python -m py_compile tests/test_deployment_drift_studio.py
+      - name: Candidate regression suite (must pass)
+        run: python -m pytest tests/test_deployment_drift.py tests/test_deployment_drift_studio.py -q
+      - name: Both offline policies (must pass)
+        run: |
+          python deployment_drift.py --format text
+          python deployment_drift.py --config deployment-drift.issue-1410.example.json --format text
+      - name: Baseline control must reproduce exactly four test failures
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+          base = '7fe70c398275eedcbe09dc9a07be30a5d84ff14c'
+          names = ('deployment-drift.json', 'deployment-drift.issue-1410.example.json')
+          saved = {name: Path(name).read_bytes() for name in names}
+          report = Path(os.environ['RUNNER_TEMP']) / 'studio-baseline.xml'
+          try:
+              for name in names:
+                  Path(name).write_bytes(subprocess.check_output(['git', 'show', base + ':' + name]))
+              result = subprocess.run([
+                  sys.executable, '-m', 'pytest', 'tests/test_deployment_drift.py',
+                  'tests/test_deployment_drift_studio.py', '-q', '--junitxml=' + str(report),
+              ], check=False)
+          finally:
+              for name, content in saved.items():
+                  Path(name).write_bytes(content)
+          cases = list(ET.parse(report).iter('testcase'))
+          failed = sorted(case.attrib['name'] for case in cases if case.find('failure') is not None)
+          expected = sorted([
+              'test_repository_configs_are_valid_offline',
+              'test_issue_1410_config_reports_exact_live_only_failure_state',
+              'test_studio_is_inventoried_without_a_drift_allowance[deployment-drift.json]',
+              'test_studio_is_inventoried_without_a_drift_allowance[deployment-drift.issue-1410.example.json]',
+          ])
+          assert result.returncode == 1, result.returncode
+          assert len(cases) == 43, len(cases)
+          assert failed == expected, failed
+          assert not any(case.find('error') is not None or case.find('skipped') is not None for case in cases)
+          print('BASELINE CONTROL VERIFIED: exactly 4 expected failures and 39 passes; candidate configs restored.')
+          PY
+      - name: Confirm control left candidate worktree clean
+        run: |
+          git diff --exit-code
+          python -m pytest tests/test_deployment_drift.py tests/test_deployment_drift_studio.py -q
