@@ -1,4 +1,4 @@
-name: SOL-DRIFT JS SDK dist TS5 artifact
+name: SOL-DRIFT JS SDK dist artifact
 
 on:
   push:
@@ -17,18 +17,41 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Build exact paid-head SDK with historical-compatible TypeScript
+      - name: Build runtime bundles and exact declaration delta
         working-directory: js-sdk
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund
-          npm install --no-audit --no-fund --no-save typescript@5.7.3
           echo "node=$(node --version)"
           echo "npm=$(npm --version)"
           echo "typescript=$(node -p \"require('typescript/package.json').version\")"
           echo "tsup=$(node -p \"require('tsup/package.json').version\")"
-          npm run typecheck
-          npm run build
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tsup.config.ts')
+          s = p.read_text()
+          old = '  dts: true,'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one dts:true setting, found {s.count(old)}')
+          p.write_text(s.replace(old, '  dts: false,'))
+          PY
+          npx tsup src/index.ts --format cjs,esm --clean
+          git restore tsup.config.ts
+          rm -f package-lock.json
+          git restore dist/index.d.ts dist/index.d.mts
+          python - <<'PY'
+          from pathlib import Path
+          marker = "    /** Tags for the video. */\n    tags?: string[];\n"
+          addition = "    /** Multipart filename override, including the video extension. Useful for untyped Blobs. */\n    filename?: string;\n"
+          for name in ('dist/index.d.ts', 'dist/index.d.mts'):
+              p = Path(name)
+              s = p.read_text()
+              if s.count(marker) != 1:
+                  raise SystemExit(f'{name}: expected one exact UploadOptions tags marker, found {s.count(marker)}')
+              if 'filename?: string;' in s:
+                  raise SystemExit(f'{name}: filename option already present before patch')
+              p.write_text(s.replace(marker, marker + addition))
+          PY
       - name: Verify generated scope and hashes
         run: |
           set -euo pipefail
@@ -43,14 +66,19 @@ jobs:
             printf '%s\n' "$bad" >&2
             exit 1
           fi
+          expected=4
+          actual="$(git diff --name-only | wc -l | tr -d ' ')"
+          test "$actual" = "$expected"
           for f in js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts; do
             test -f "$f"
           done
+          grep -Fq 'filename?: string;' js-sdk/dist/index.d.ts
+          grep -Fq 'filename?: string;' js-sdk/dist/index.d.mts
           echo '--- SHA256 ---'
           sha256sum js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts
       - uses: actions/upload-artifact@v4
         with:
-          name: js-sdk-dist-pr2215-ts5
+          name: js-sdk-dist-pr2215-runtime-plus-decls
           path: |
             js-sdk/dist/index.js
             js-sdk/dist/index.mjs
