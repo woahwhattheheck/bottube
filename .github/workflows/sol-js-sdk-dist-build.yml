@@ -19,19 +19,44 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Build committed JS SDK artifacts
+      - name: Build runtime bundles without broken DTS plugin
         working-directory: js-sdk
         run: |
+          set -euo pipefail
           npm install --no-audit --no-fund
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tsup.config.ts')
+          s = p.read_text()
+          old = '  dts: true,'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one dts:true setting, found {s.count(old)}')
+          p.write_text(s.replace(old, '  dts: false,'))
+          PY
           npm run build
+          git restore tsup.config.ts
+          rm -f package-lock.json
+          git restore dist/index.d.ts dist/index.d.mts
+          python - <<'PY'
+          from pathlib import Path
+          old = "  /** Tags for the video. */\n  tags?: string[];\n}"
+          new = "  /** Tags for the video. */\n  tags?: string[];\n  /** Multipart filename override, including the video extension. Useful for untyped Blobs. */\n  filename?: string;\n}"
+          for name in ('dist/index.d.ts', 'dist/index.d.mts'):
+              p = Path(name)
+              s = p.read_text()
+              if s.count(old) != 1:
+                  raise SystemExit(f'{name}: expected one UploadOptions tail, found {s.count(old)}')
+              p.write_text(s.replace(old, new))
+          PY
       - name: Verify scope and commit generated dist
         run: |
           set -euo pipefail
           git diff --check
           git status --short
-          if git diff --name-only | grep -Ev '^(js-sdk/dist/|js-sdk/package-lock.json$)' | grep -q .; then
-            echo 'Unexpected build output outside js-sdk/dist' >&2
-            git diff --name-only >&2
+          unexpected="$(git status --porcelain | awk '{print $2}' | grep -Ev '^js-sdk/dist/' || true)"
+          if [ -n "$unexpected" ]; then
+            echo 'Unexpected build output outside js-sdk/dist:' >&2
+            printf '%s\n' "$unexpected" >&2
             exit 1
           fi
           git add -f js-sdk/dist
