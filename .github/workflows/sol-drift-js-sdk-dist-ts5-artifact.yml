@@ -1,0 +1,60 @@
+name: SOL-DRIFT JS SDK dist TS5 artifact
+
+on:
+  push:
+    branches:
+      - sol-drift/js-sdk-dist-ts5-artifact-20260908-01
+
+permissions:
+  contents: read
+
+jobs:
+  build-dist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build exact paid-head SDK with historical-compatible TypeScript
+        working-directory: js-sdk
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npm install --no-audit --no-fund --no-save typescript@5.7.3
+          echo "node=$(node --version)"
+          echo "npm=$(npm --version)"
+          echo "typescript=$(node -p \"require('typescript/package.json').version\")"
+          echo "tsup=$(node -p \"require('tsup/package.json').version\")"
+          npm run typecheck
+          npm run build
+      - name: Verify generated scope and hashes
+        run: |
+          set -euo pipefail
+          git diff --check
+          echo '--- git status --short ---'
+          git status --short
+          echo '--- tracked diff names ---'
+          git diff --name-only
+          bad="$(git diff --name-only | grep -Ev '^js-sdk/dist/(index\.js|index\.mjs|index\.d\.ts|index\.d\.mts)$' || true)"
+          if [ -n "$bad" ]; then
+            echo 'Unexpected tracked build output:' >&2
+            printf '%s\n' "$bad" >&2
+            exit 1
+          fi
+          for f in js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts; do
+            test -f "$f"
+          done
+          echo '--- SHA256 ---'
+          sha256sum js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: js-sdk-dist-pr2215-ts5
+          path: |
+            js-sdk/dist/index.js
+            js-sdk/dist/index.mjs
+            js-sdk/dist/index.d.ts
+            js-sdk/dist/index.d.mts
+          if-no-files-found: error
+          retention-days: 3
