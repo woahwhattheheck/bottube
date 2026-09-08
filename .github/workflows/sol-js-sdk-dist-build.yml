@@ -33,7 +33,7 @@ jobs:
               raise SystemExit(f'expected exactly one dts:true setting, found {s.count(old)}')
           p.write_text(s.replace(old, '  dts: false,'))
           PY
-          npm run build
+          npx tsup src/index.ts --format cjs,esm --clean
           git restore tsup.config.ts
           rm -f package-lock.json
           git restore dist/index.d.ts dist/index.d.mts
