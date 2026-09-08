@@ -1,0 +1,45 @@
+name: SOL JS SDK dist build
+
+on:
+  push:
+    branches:
+      - sol/js-sdk-dist-build-2215-20260908-01
+
+permissions:
+  contents: write
+
+jobs:
+  build-dist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build committed JS SDK artifacts
+        working-directory: js-sdk
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Verify scope and commit generated dist
+        run: |
+          set -euo pipefail
+          git diff --check
+          git status --short
+          if git diff --name-only | grep -Ev '^(js-sdk/dist/|js-sdk/package-lock.json$)' | grep -q .; then
+            echo 'Unexpected build output outside js-sdk/dist' >&2
+            git diff --name-only >&2
+            exit 1
+          fi
+          git add -f js-sdk/dist
+          if git diff --cached --quiet; then
+            echo 'No dist changes generated'
+            exit 0
+          fi
+          git config user.name 'SOL build helper'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'build(js-sdk): regenerate dist for Blob filenames'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
