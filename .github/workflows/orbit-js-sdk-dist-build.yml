@@ -30,6 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           paid_head='4fca8b4a353fad7ca1513b8107ba559f6c5cb617'
+          evidence_dir="$RUNNER_TEMP/orbit-bottube-2215-evidence"
           test "$(git merge-base HEAD "$paid_head")" = "$paid_head"
           unexpected="$(git diff --name-only "$paid_head"...HEAD | grep -Fvx '.github/workflows/orbit-js-sdk-dist-build.yml' || true)"
           if [ -n "$unexpected" ]; then
@@ -37,39 +38,40 @@ jobs:
             printf '%s\n' "$unexpected" >&2
             exit 1
           fi
-          mkdir -p evidence/dist
+          mkdir -p "$evidence_dir/dist"
           {
             echo "paid_head=$paid_head"
             echo "helper_prebuild_head=$(git rev-parse HEAD)"
             echo "node=$(node --version)"
             echo "npm=$(npm --version)"
-          } > evidence/tool-versions.txt
+          } > "$evidence_dir/tool-versions.txt"
 
       - name: Install, run exact manifest, and recover only known DTS crash
         shell: bash
         working-directory: js-sdk
         run: |
           set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/orbit-bottube-2215-evidence"
           npm install --no-audit --no-fund
-          echo "tsup=$(./node_modules/.bin/tsup --version | head -n 1)" >> ../evidence/tool-versions.txt
-          echo "typescript=$(./node_modules/.bin/tsc --version | head -n 1)" >> ../evidence/tool-versions.txt
+          echo "tsup=$(./node_modules/.bin/tsup --version | head -n 1)" >> "$evidence_dir/tool-versions.txt"
+          echo "typescript=$(./node_modules/.bin/tsc --version | head -n 1)" >> "$evidence_dir/tool-versions.txt"
 
           set +e
-          npm run build > ../evidence/manifest-build.log 2>&1
+          npm run build > "$evidence_dir/manifest-build.log" 2>&1
           manifest_status=$?
           set -e
-          echo "manifest_build_exit=$manifest_status" >> ../evidence/tool-versions.txt
+          echo "manifest_build_exit=$manifest_status" >> "$evidence_dir/tool-versions.txt"
 
           if [ "$manifest_status" -eq 0 ]; then
-            echo manifest > ../evidence/build-mode.txt
+            echo manifest > "$evidence_dir/build-mode.txt"
           else
-            if ! grep -q "useCaseSensitiveFileNames" ../evidence/manifest-build.log; then
-              cat ../evidence/manifest-build.log >&2
+            if ! grep -q "useCaseSensitiveFileNames" "$evidence_dir/manifest-build.log"; then
+              cat "$evidence_dir/manifest-build.log" >&2
               echo 'Manifest build failed for an unrecognized reason' >&2
               exit "$manifest_status"
             fi
 
-            echo fallback-after-known-dts-crash > ../evidence/build-mode.txt
+            echo fallback-after-known-dts-crash > "$evidence_dir/build-mode.txt"
             git restore -- tsup.config.ts dist/index.js dist/index.mjs dist/index.d.ts dist/index.d.mts
 
             python - <<'PY'
@@ -85,7 +87,7 @@ jobs:
             # Do not call npm run build here: package.json hard-codes --dts and
             # would override the temporary dts:false config. Invoke tsup without
             # a DTS CLI flag so only the JS runtime bundles are regenerated.
-            ./node_modules/.bin/tsup src/index.ts --format cjs,esm --clean > ../evidence/fallback-runtime-build.log 2>&1
+            ./node_modules/.bin/tsup src/index.ts --format cjs,esm --clean > "$evidence_dir/fallback-runtime-build.log" 2>&1
             git restore -- tsup.config.ts
 
             # Runtime-only --clean removes declarations. Restore the exact paid
@@ -110,17 +112,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/orbit-bottube-2215-evidence"
           git diff --check
-          git diff --name-only > evidence/git-diff-name-only.txt
-          git status --short --untracked-files=all > evidence/git-status-short.txt
-          git diff -- js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts > evidence/dist.patch
+          git diff --name-only > "$evidence_dir/git-diff-name-only.txt"
+          git status --short --untracked-files=all > "$evidence_dir/git-status-short.txt"
+          git diff -- js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts > "$evidence_dir/dist.patch"
 
           expected="$(printf '%s\n' \
             js-sdk/dist/index.d.mts \
             js-sdk/dist/index.d.ts \
             js-sdk/dist/index.js \
             js-sdk/dist/index.mjs | sort)"
-          actual="$(sort evidence/git-diff-name-only.txt)"
+          actual="$(sort "$evidence_dir/git-diff-name-only.txt")"
           if [ "$actual" != "$expected" ]; then
             echo 'Tracked build diff escaped the four requested dist paths' >&2
             printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual" >&2
@@ -150,22 +153,23 @@ jobs:
           grep -Fq 'filename?: string;' js-sdk/dist/index.d.ts
           grep -Fq 'filename?: string;' js-sdk/dist/index.d.mts
 
-          : > evidence/dist-sha256.txt
-          : > evidence/dist-git-blobs.txt
+          : > "$evidence_dir/dist-sha256.txt"
+          : > "$evidence_dir/dist-git-blobs.txt"
           for file in \
             js-sdk/dist/index.js \
             js-sdk/dist/index.mjs \
             js-sdk/dist/index.d.ts \
             js-sdk/dist/index.d.mts; do
-            sha256sum "$file" >> evidence/dist-sha256.txt
-            printf '%s  %s\n' "$(git hash-object "$file")" "$file" >> evidence/dist-git-blobs.txt
-            cp "$file" "evidence/dist/$(basename "$file")"
+            sha256sum "$file" >> "$evidence_dir/dist-sha256.txt"
+            printf '%s  %s\n' "$(git hash-object "$file")" "$file" >> "$evidence_dir/dist-git-blobs.txt"
+            cp "$file" "$evidence_dir/dist/$(basename "$file")"
           done
 
       - name: Commit generated bytes to isolated helper branch
         shell: bash
         run: |
           set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/orbit-bottube-2215-evidence"
           git add -f js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts
           expected="$(printf '%s\n' \
             js-sdk/dist/index.d.mts \
@@ -177,7 +181,7 @@ jobs:
           git config user.name 'ORBIT build helper'
           git config user.email 'actions@users.noreply.github.com'
           git commit -m 'build(js-sdk): regenerate dist for Blob filenames (#2215)'
-          git rev-parse HEAD > evidence/generated-commit.txt
+          git rev-parse HEAD > "$evidence_dir/generated-commit.txt"
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Upload exact build evidence
@@ -185,6 +189,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: orbit-bottube-2215-dist-evidence
-          path: evidence/
+          path: ${{ runner.temp }}/orbit-bottube-2215-evidence/
           if-no-files-found: warn
           retention-days: 7
