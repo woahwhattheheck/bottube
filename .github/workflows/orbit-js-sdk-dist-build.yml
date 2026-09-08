@@ -1,0 +1,190 @@
+name: ORBIT JS SDK dist build 2215
+
+on:
+  push:
+    branches:
+      - 'orbit-build/js-sdk-dist-2215-20260908-01'
+    paths:
+      - '.github/workflows/orbit-js-sdk-dist-build.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-dist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout isolated helper branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use hosted Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify immutable paid-head ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          paid_head='4fca8b4a353fad7ca1513b8107ba559f6c5cb617'
+          test "$(git merge-base HEAD "$paid_head")" = "$paid_head"
+          unexpected="$(git diff --name-only "$paid_head"...HEAD | grep -Fvx '.github/workflows/orbit-js-sdk-dist-build.yml' || true)"
+          if [ -n "$unexpected" ]; then
+            echo 'Helper branch contains non-workflow changes before build:' >&2
+            printf '%s\n' "$unexpected" >&2
+            exit 1
+          fi
+          mkdir -p evidence/dist
+          {
+            echo "paid_head=$paid_head"
+            echo "helper_prebuild_head=$(git rev-parse HEAD)"
+            echo "node=$(node --version)"
+            echo "npm=$(npm --version)"
+          } > evidence/tool-versions.txt
+
+      - name: Install, run exact manifest, and recover only known DTS crash
+        shell: bash
+        working-directory: js-sdk
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          echo "tsup=$(./node_modules/.bin/tsup --version | head -n 1)" >> ../evidence/tool-versions.txt
+          echo "typescript=$(./node_modules/.bin/tsc --version | head -n 1)" >> ../evidence/tool-versions.txt
+
+          set +e
+          npm run build > ../evidence/manifest-build.log 2>&1
+          manifest_status=$?
+          set -e
+          echo "manifest_build_exit=$manifest_status" >> ../evidence/tool-versions.txt
+
+          if [ "$manifest_status" -eq 0 ]; then
+            echo manifest > ../evidence/build-mode.txt
+          else
+            if ! grep -q "useCaseSensitiveFileNames" ../evidence/manifest-build.log; then
+              cat ../evidence/manifest-build.log >&2
+              echo 'Manifest build failed for an unrecognized reason' >&2
+              exit "$manifest_status"
+            fi
+
+            echo fallback-after-known-dts-crash > ../evidence/build-mode.txt
+            git restore -- tsup.config.ts dist/index.js dist/index.mjs dist/index.d.ts dist/index.d.mts
+
+            python - <<'PY'
+          from pathlib import Path
+          p = Path('tsup.config.ts')
+          s = p.read_text()
+          old = '  dts: true,'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one dts:true setting, found {s.count(old)}')
+          p.write_text(s.replace(old, '  dts: false,'))
+          PY
+
+            # Do not call npm run build here: package.json hard-codes --dts and
+            # would override the temporary dts:false config. Invoke tsup without
+            # a DTS CLI flag so only the JS runtime bundles are regenerated.
+            ./node_modules/.bin/tsup src/index.ts --format cjs,esm --clean > ../evidence/fallback-runtime-build.log 2>&1
+            git restore -- tsup.config.ts
+
+            # Runtime-only --clean removes declarations. Restore the exact paid
+            # versions and apply only the source-level UploadOptions.filename field.
+            git restore -- dist/index.d.ts dist/index.d.mts
+            python - <<'PY'
+          from pathlib import Path
+          old = "    /** Tags for the video. */\n    tags?: string[];\n}"
+          new = "    /** Tags for the video. */\n    tags?: string[];\n    /** Multipart filename override, including the video extension. Useful for untyped Blobs. */\n    filename?: string;\n}"
+          for name in ('dist/index.d.ts', 'dist/index.d.mts'):
+              p = Path(name)
+              s = p.read_text()
+              if s.count(old) != 1:
+                  raise SystemExit(f'{name}: expected one UploadOptions tail, found {s.count(old)}')
+              p.write_text(s.replace(old, new))
+          PY
+          fi
+
+          rm -f package-lock.json
+
+      - name: Audit exact generated scope and bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --name-only > evidence/git-diff-name-only.txt
+          git status --short --untracked-files=all > evidence/git-status-short.txt
+          git diff -- js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts > evidence/dist.patch
+
+          expected="$(printf '%s\n' \
+            js-sdk/dist/index.d.mts \
+            js-sdk/dist/index.d.ts \
+            js-sdk/dist/index.js \
+            js-sdk/dist/index.mjs | sort)"
+          actual="$(sort evidence/git-diff-name-only.txt)"
+          if [ "$actual" != "$expected" ]; then
+            echo 'Tracked build diff escaped the four requested dist paths' >&2
+            printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual" >&2
+            exit 1
+          fi
+
+          unexpected_status="$(git status --porcelain | awk '{print $2}' | grep -Ev '^js-sdk/dist/(index\.js|index\.mjs|index\.d\.ts|index\.d\.mts)$' || true)"
+          if [ -n "$unexpected_status" ]; then
+            echo 'Worktree output escaped the four requested dist paths' >&2
+            printf '%s\n' "$unexpected_status" >&2
+            exit 1
+          fi
+
+          test "$(git diff --numstat -- js-sdk/dist/index.d.ts)" = $'2\t0\tjs-sdk/dist/index.d.ts'
+          test "$(git diff --numstat -- js-sdk/dist/index.d.mts)" = $'2\t0\tjs-sdk/dist/index.d.mts'
+
+          for needle in \
+            'Blob uploads need a supported video MIME type or an explicit filename option.' \
+            'video/mp4' \
+            'video/webm' \
+            'video/quicktime' \
+            'video/x-matroska' \
+            'video/x-msvideo'; do
+            grep -Fq "$needle" js-sdk/dist/index.js
+            grep -Fq "$needle" js-sdk/dist/index.mjs
+          done
+          grep -Fq 'filename?: string;' js-sdk/dist/index.d.ts
+          grep -Fq 'filename?: string;' js-sdk/dist/index.d.mts
+
+          : > evidence/dist-sha256.txt
+          : > evidence/dist-git-blobs.txt
+          for file in \
+            js-sdk/dist/index.js \
+            js-sdk/dist/index.mjs \
+            js-sdk/dist/index.d.ts \
+            js-sdk/dist/index.d.mts; do
+            sha256sum "$file" >> evidence/dist-sha256.txt
+            printf '%s  %s\n' "$(git hash-object "$file")" "$file" >> evidence/dist-git-blobs.txt
+            cp "$file" "evidence/dist/$(basename "$file")"
+          done
+
+      - name: Commit generated bytes to isolated helper branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -f js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts
+          expected="$(printf '%s\n' \
+            js-sdk/dist/index.d.mts \
+            js-sdk/dist/index.d.ts \
+            js-sdk/dist/index.js \
+            js-sdk/dist/index.mjs | sort)"
+          actual="$(git diff --cached --name-only | sort)"
+          test "$actual" = "$expected"
+          git config user.name 'ORBIT build helper'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'build(js-sdk): regenerate dist for Blob filenames (#2215)'
+          git rev-parse HEAD > evidence/generated-commit.txt
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Upload exact build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbit-bottube-2215-dist-evidence
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 7
