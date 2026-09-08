@@ -39,8 +39,8 @@ jobs:
           git restore dist/index.d.ts dist/index.d.mts
           python - <<'PY'
           from pathlib import Path
-          old = "  /** Tags for the video. */\n  tags?: string[];\n}"
-          new = "  /** Tags for the video. */\n  tags?: string[];\n  /** Multipart filename override, including the video extension. Useful for untyped Blobs. */\n  filename?: string;\n}"
+          old = "    /** Tags for the video. */\n    tags?: string[];\n}"
+          new = "    /** Tags for the video. */\n    tags?: string[];\n    /** Multipart filename override, including the video extension. Useful for untyped Blobs. */\n    filename?: string;\n}"
           for name in ('dist/index.d.ts', 'dist/index.d.mts'):
               p = Path(name)
               s = p.read_text()
@@ -53,13 +53,25 @@ jobs:
           set -euo pipefail
           git diff --check
           git status --short
-          unexpected="$(git status --porcelain | awk '{print $2}' | grep -Ev '^js-sdk/dist/' || true)"
+          unexpected="$(git status --porcelain | awk '{print $2}' | grep -Ev '^js-sdk/dist/(index\.js|index\.mjs|index\.d\.ts|index\.d\.mts)$' || true)"
           if [ -n "$unexpected" ]; then
-            echo 'Unexpected build output outside js-sdk/dist:' >&2
+            echo 'Unexpected build output outside the four expected js-sdk/dist files:' >&2
             printf '%s\n' "$unexpected" >&2
             exit 1
           fi
-          git add -f js-sdk/dist
+          for needle in \
+            "Blob uploads need a supported video MIME type or an explicit filename option." \
+            "video/mp4" \
+            "video/webm" \
+            "video/quicktime" \
+            "video/x-matroska" \
+            "video/x-msvideo"; do
+            grep -Fq "$needle" js-sdk/dist/index.js
+            grep -Fq "$needle" js-sdk/dist/index.mjs
+          done
+          grep -Fq "filename?: string;" js-sdk/dist/index.d.ts
+          grep -Fq "filename?: string;" js-sdk/dist/index.d.mts
+          git add -f js-sdk/dist/index.js js-sdk/dist/index.mjs js-sdk/dist/index.d.ts js-sdk/dist/index.d.mts
           if git diff --cached --quiet; then
             echo 'No dist changes generated'
             exit 0
