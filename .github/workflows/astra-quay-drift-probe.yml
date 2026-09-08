@@ -1,4 +1,4 @@
-name: ASTRA-QUAY Studio drift validation
+name: ASTRA-QUAY PR2207 drift diagnosis
 
 on:
   push:
@@ -7,76 +7,49 @@ on:
 permissions:
   contents: read
 jobs:
-  validate:
-    name: Studio drift (${{ matrix.python-version }})
+  diagnose:
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v4
         with:
           repository: woahwhattheheck/bottube
-          ref: 38a4c2725fc5cf681cf107dfd6fa08f0b734d89f
-          fetch-depth: 3
+          ref: 87251dcb81e946b40a8e55138be21c1f3863c174
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.11'
       - name: Install isolated drift dependencies
         run: python -m pip install --timeout 30 'pytest==9.1.1' 'PyYAML==6.0.3'
-      - name: Verify exact candidate and four-file diff
+      - name: Exact source and offline diagnostic reports
         run: |
-          test "$(git rev-parse HEAD)" = 38a4c2725fc5cf681cf107dfd6fa08f0b734d89f
-          git diff --check 7fe70c398275eedcbe09dc9a07be30a5d84ff14c HEAD
-          git diff --stat 7fe70c398275eedcbe09dc9a07be30a5d84ff14c HEAD
-          python -m py_compile tests/test_deployment_drift_studio.py tests/test_deployment_drift.py
-      - name: Both offline policies (must pass)
-        run: |
-          python deployment_drift.py --format text
-          python deployment_drift.py --config deployment-drift.issue-1410.example.json --format text
-      - name: Candidate regression suite (must pass)
-        run: python -m pytest tests/test_deployment_drift.py tests/test_deployment_drift_studio.py -q
-      - name: Baseline control must reproduce exactly four test failures
-        shell: bash
-        run: |
+          test "$(git rev-parse HEAD)" = 87251dcb81e946b40a8e55138be21c1f3863c174
+          mkdir -p diagnosis
           python - <<'PY'
+          import json
           from pathlib import Path
-          import os
-          import subprocess
-          import sys
-          import xml.etree.ElementTree as ET
-          base = '7fe70c398275eedcbe09dc9a07be30a5d84ff14c'
-          names = ('deployment-drift.json', 'deployment-drift.issue-1410.example.json', 'tests/test_deployment_drift.py')
-          saved = {name: Path(name).read_bytes() for name in names}
-          report = Path(os.environ['RUNNER_TEMP']) / 'studio-baseline.xml'
-          try:
-              for name in names:
-                  Path(name).write_bytes(subprocess.check_output(['git', 'show', base + ':' + name]))
-              result = subprocess.run([
-                  sys.executable, '-m', 'pytest', 'tests/test_deployment_drift.py',
-                  'tests/test_deployment_drift_studio.py', '-q', '--junitxml=' + str(report),
-              ], check=False)
-          finally:
-              for name, content in saved.items():
-                  Path(name).write_bytes(content)
-          cases = list(ET.parse(report).iter('testcase'))
-          failed = sorted(case.attrib['name'] for case in cases if case.find('failure') is not None)
-          expected = sorted([
-              'test_repository_configs_are_valid_offline',
-              'test_issue_1410_config_reports_exact_live_only_failure_state',
-              'test_studio_is_inventoried_without_a_drift_allowance[deployment-drift.json]',
-              'test_studio_is_inventoried_without_a_drift_allowance[deployment-drift.issue-1410.example.json]',
-          ])
-          assert result.returncode == 1, result.returncode
-          assert len(cases) == 43, len(cases)
-          assert failed == expected, failed
-          assert not any(case.find('error') is not None or case.find('skipped') is not None for case in cases)
-          print('BASELINE CONTROL VERIFIED: exactly 4 expected failures and 39 passes; candidate files restored.')
+          from deployment_drift import build_report, load_config
+          root = Path.cwd()
+          for name in ('deployment-drift.json', 'deployment-drift.issue-1410.example.json'):
+              report = build_report(root, load_config(root / name))
+              (root / 'diagnosis' / name).write_text(json.dumps(report, indent=2) + '\n')
+              print(json.dumps({'config': name, 'status': report['status'], 'exit_code': report['exit_code'], 'inventory': report['inventory'], 'blocking': report['blocking'], 'stale_allowances': report['stale_allowances']}, sort_keys=True))
           PY
-      - name: Confirm control left candidate worktree clean
-        run: |
-          git diff --exit-code
-          python -m pytest tests/test_deployment_drift.py tests/test_deployment_drift_studio.py -q
+      - name: Actual drift tests (failures remain failures)
+        run: python -m pytest tests/test_deployment_drift.py tests/test_deployment_drift_studio.py -q --junitxml=diagnosis/tests.xml
+      - name: Retain exact public source and diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-quay-pr2207-drift-87251dcb
+          retention-days: 14
+          path: |
+            diagnosis/
+            deployment_drift.py
+            deployment-drift.json
+            deployment-drift.issue-1410.example.json
+            tests/test_deployment_drift.py
+            tests/test_deployment_drift_studio.py
+            bottube_server.py
+            studio_blueprint.py
+            openapi.yaml
