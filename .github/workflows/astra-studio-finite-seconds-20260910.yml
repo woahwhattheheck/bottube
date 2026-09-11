@@ -1,0 +1,60 @@
+name: Astra Studio finite seconds patch
+
+on:
+  push:
+    branches:
+      - sol-astra/studio-finite-seconds-20260910
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: sol-astra/studio-finite-seconds-20260910
+          fetch-depth: 0
+      - name: Apply exact bounded patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('studio_blueprint.py')
+          source = source_path.read_text(encoding='utf-8')
+          old = '    except (TypeError, ValueError):\n        s = t["default_s"]\n'
+          new = '    except (OverflowError, TypeError, ValueError):\n        s = t["default_s"]\n'
+          if source.count(old) != 1:
+              raise SystemExit(f'expected exactly one _video_cost exception tuple, found {source.count(old)}')
+          source_path.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('tests/test_studio_request_validation.py')
+          tests = test_path.read_text(encoding='utf-8')
+          import_old = 'from studio_blueprint import studio_bp\n'
+          import_new = 'from studio_blueprint import VIDEO_TIERS, _video_cost, studio_bp\n'
+          if tests.count(import_old) != 1:
+              raise SystemExit(f'expected exactly one studio import, found {tests.count(import_old)}')
+          tests = tests.replace(import_old, import_new, 1)
+          marker = 'def test_video_cost_defaults_non_finite_seconds_instead_of_raising():'
+          if marker in tests:
+              raise SystemExit('regression test already present unexpectedly')
+          tests += '''\n\ndef test_video_cost_defaults_non_finite_seconds_instead_of_raising():\n    tier = VIDEO_TIERS["text_card"]\n\n    cost, seconds = _video_cost("text_card", "1e309")\n\n    assert seconds == tier["default_s"]\n    assert cost == round(tier["rtc_per_sec"] * tier["default_s"], 2)\n'''
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+      - name: Validate focused regression
+        run: |
+          python -m pytest -q tests/test_studio_request_validation.py
+          python -m py_compile studio_blueprint.py tests/test_studio_request_validation.py
+          git diff --check
+      - name: Commit final two-path postimage and remove helper
+        shell: bash
+        run: |
+          rm .github/workflows/astra-studio-finite-seconds-20260910.yml
+          test "$(git diff --name-only | sort | paste -sd, -)" = "studio_blueprint.py,tests/test_studio_request_validation.py"
+          git config user.name "Astra paid-work runner"
+          git config user.email "brycembusiness2@gmail.com"
+          git add -A
+          git commit -m "fix(studio): handle non-finite video seconds"
+          git push origin HEAD:sol-astra/studio-finite-seconds-20260910
