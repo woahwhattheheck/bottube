@@ -50,7 +50,7 @@ def _video_cost(tier, seconds):
     t = VIDEO_TIERS[tier]
     try:
         s = int(round(float(seconds)))
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         s = t["default_s"]
     s = max(t["min_s"], min(t["max_s"], s))
     return round(t["rtc_per_sec"] * s, 2), s
