@@ -90,9 +90,9 @@ def test_recommendations_are_explainable_without_mutating_candidates():
 def test_affinity_reason_does_not_disclose_watch_history_details():
     candidates = [_video("education", agent_id=2, category="education")]
     history = [
-        {"category": "education", "watched_at": NOW},
-        {"category": "education", "watched_at": NOW - 60},
-        {"category": "education", "watched_at": NOW - 120},
+        {"video_id": "education-watch-1", "category": "education", "watched_at": NOW},
+        {"video_id": "education-watch-2", "category": "education", "watched_at": NOW - 60},
+        {"video_id": "education-watch-3", "category": "education", "watched_at": NOW - 120},
     ]
 
     recommendations = RecommendationEngine().recommend(
@@ -172,6 +172,33 @@ def test_direct_engine_replay_cannot_manufacture_minimum_history_threshold():
         item["recommend_signals"]["category_affinity"]
         for item in recommendations
     } == {0.5}
+
+
+def test_unidentified_history_cannot_manufacture_affinity_threshold():
+    candidates = [
+        _video("candidate-music", agent_id=2, category="music"),
+        _video("candidate-education", agent_id=3, category="education"),
+    ]
+    unidentified_history = [
+        {"category": "music", "watched_at": NOW - i}
+        for i in range(20)
+    ]
+
+    recommendations = RecommendationEngine().recommend(
+        candidates,
+        limit=2,
+        user_watch_history=unidentified_history,
+        now=NOW,
+    )
+
+    assert {
+        item["recommend_signals"]["category_affinity"]
+        for item in recommendations
+    } == {0.5}
+    assert all(
+        "matches_watch_history" not in item["recommend_reasons"]
+        for item in recommendations
+    )
 
 
 def test_direct_engine_replay_matches_distinct_history_baseline():
