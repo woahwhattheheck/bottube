@@ -30,9 +30,9 @@ These explanations do **not** include raw watch-history events, watched video ID
 
 ## Replay resistance
 
-Category affinity counts each distinct watched video once, using the most recent watch timestamp for that video. This invariant is enforced inside the core recommendation library, not only by the SQLite feed adapter, so direct callers receive the same replay-resistant semantics. Replaying one clip repeatedly therefore cannot satisfy the minimum-history threshold, crowd the preference window, or manufacture a category preference.
+Category affinity counts each provably distinct watched video once, using the most recent watch timestamp for that video. This invariant is enforced inside the core recommendation library, not only by the SQLite feed adapter, so direct callers receive the same replay-resistant semantics. Replaying one clip repeatedly therefore cannot satisfy the minimum-history threshold, crowd the preference window, or manufacture a category preference.
 
-Watch-history events without a stable `video_id` are retained rather than guessed to be duplicates.
+A raw history event contributes to affinity only when it carries a non-empty stable `video_id`. Events without stable identity fail closed and are ignored for both the minimum-history threshold and affinity scoring; otherwise a caller could strip identity from replayed events and bypass deduplication. The SQLite adapter preserves its existing distinct-video grouping and now passes the grouped `video_id` into the core engine so personalized feed affinity remains functional under the same contract.
 
 ## Diagnostics
 
@@ -60,4 +60,5 @@ The recommended feed evaluates a wider bounded pool than the final page (`8x` th
 - the serializer used by the personalized feed preserves structured explanation fields;
 - diagnostics report creator concentration and reason frequencies;
 - the core engine collapses replayed `video_id` events before affinity thresholds/scoring;
-- SQLite-adapter replay protection remains intact.
+- unidentified raw history cannot manufacture threshold eligibility or affinity;
+- the SQLite adapter passes grouped stable video identity and remains replay-resistant.
