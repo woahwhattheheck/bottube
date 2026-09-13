@@ -125,7 +125,6 @@ CREATE INDEX IF NOT EXISTS idx_gpu_jobs_provider ON gpu_jobs(provider_id);
 CREATE INDEX IF NOT EXISTS idx_gpu_providers_status ON gpu_providers(status);
 """
 
-
 def init_gpu_db(db_path: str = None):
     """Initialize GPU marketplace tables in the database."""
     if db_path is None:
@@ -142,11 +141,9 @@ def init_gpu_db(db_path: str = None):
     conn.commit()
     conn.close()
 
-
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
-
 
 def _claim_gpu_job_transaction(db, provider_id: str, agent_id: int, job_id: str, now: int) -> str:
     """Atomically reserve one pending job for one non-busy provider."""
@@ -178,111 +175,6 @@ def _claim_gpu_job_transaction(db, provider_id: str, agent_id: int, job_id: str,
     db.commit()
     return "claimed"
 
-
-def _start_gpu_job_transaction(db, provider_id: str, job_id: str, now: int) -> bool:
-    """Atomically transition one provider-owned claimed job to running."""
-    started = db.execute(
-        """
-        UPDATE gpu_jobs
-        SET status = 'running', started_at = ?
-        WHERE id = ? AND provider_id = ? AND status = 'claimed'
-        """,
-        (now, job_id, provider_id),
-    )
-    if int(getattr(started, "rowcount", 0) or 0) <= 0:
-        db.rollback()
-        return False
-    db.commit()
-    return True
-
-
-def _complete_gpu_job_transaction(
-    db,
-    *,
-    job_id: str,
-    provider_id: str,
-    now: int,
-    duration_mins: float,
-    payment: float,
-    result_url: str,
-) -> bool:
-    """Complete a running job exactly once with provider stats and history."""
-    completed = db.execute(
-        """
-        UPDATE gpu_jobs
-        SET status = 'completed', completed_at = ?, actual_mins = ?, rtc_paid = ?, result_url = ?
-        WHERE id = ? AND provider_id = ? AND status = 'running'
-        """,
-        (now, duration_mins, payment, result_url, job_id, provider_id),
-    )
-    if int(getattr(completed, "rowcount", 0) or 0) <= 0:
-        db.rollback()
-        return False
-
-    provider = db.execute(
-        """
-        UPDATE gpu_providers
-        SET status = 'online', total_jobs = total_jobs + 1,
-            total_rtc_earned = total_rtc_earned + ?
-        WHERE id = ?
-        """,
-        (payment, provider_id),
-    )
-    if int(getattr(provider, "rowcount", 0) or 0) <= 0:
-        db.rollback()
-        return False
-
-    history = db.execute(
-        """
-        INSERT INTO gpu_job_history
-            (job_id, provider_id, requester_id, job_type, status,
-             rtc_amount, duration_mins, completed_at)
-        SELECT id, provider_id, requester_id, job_type, 'completed', ?, ?, ?
-        FROM gpu_jobs
-        WHERE id = ? AND provider_id = ?
-        """,
-        (payment, duration_mins, now, job_id, provider_id),
-    )
-    if int(getattr(history, "rowcount", 0) or 0) <= 0:
-        db.rollback()
-        return False
-
-    db.commit()
-    return True
-
-
-def _release_gpu_job_transaction(
-    db,
-    provider_id: str,
-    job_id: str,
-    error_message: str,
-) -> bool:
-    """Release one active provider-owned job back to the pending queue."""
-    released = db.execute(
-        """
-        UPDATE gpu_jobs
-        SET status = 'pending', provider_id = NULL, claimed_at = NULL,
-            started_at = NULL, error_message = ?
-        WHERE id = ? AND provider_id = ? AND status IN ('claimed', 'running')
-        """,
-        (error_message, job_id, provider_id),
-    )
-    if int(getattr(released, "rowcount", 0) or 0) <= 0:
-        db.rollback()
-        return False
-
-    provider = db.execute(
-        "UPDATE gpu_providers SET status = 'online' WHERE id = ?",
-        (provider_id,),
-    )
-    if int(getattr(provider, "rowcount", 0) or 0) <= 0:
-        db.rollback()
-        return False
-
-    db.commit()
-    return True
-
-
 def get_db():
     """Get database connection from Flask g context."""
     if not hasattr(g, 'db') or g.db is None:
@@ -296,17 +188,14 @@ def get_db():
         g.db.row_factory = sqlite3.Row
     return g.db
 
-
 def generate_id(prefix: str = "") -> str:
     """Generate a unique ID."""
     return f"{prefix}{secrets.token_hex(12)}"
-
 
 def get_gpu_price(gpu_model: str) -> float:
     """Get RTC price per minute for a GPU model."""
     model_key = gpu_model.lower().replace(" ", "_").replace("-", "_")
     return GPU_PRICING.get(model_key, GPU_PRICING["default"])
-
 
 def get_agent_balance(agent_id: int) -> float:
     """Get agent's RTC balance."""
@@ -318,7 +207,6 @@ def get_agent_balance(agent_id: int) -> float:
     if row:
         return row[0] / 1_000_000  # Convert from micro-RTC
     return 0.0
-
 
 def transfer_rtc(from_id: int, to_id: int, amount: float, memo: str = "") -> bool:
     """Transfer RTC between agents (internal ledger)."""
@@ -336,17 +224,16 @@ def transfer_rtc(from_id: int, to_id: int, amount: float, memo: str = "") -> boo
         return False
 
 
-
 def require_gpu_api_key(f):
     """Require an agent API key and expose the agent on flask.g."""
     @wraps(f)
     def decorated(*args, **kwargs):
         """Decorator wrapper function.
-
+        
         Args:
             *args: Parameter value.
             **kwargs: Parameter value.
-
+        
         Returns:
             The result value.
         """
@@ -380,7 +267,6 @@ def require_gpu_api_key(f):
     return decorated
 
 
-
 def _json_object():
     """Parse the request body as a JSON object.
 
@@ -399,7 +285,6 @@ def _json_object():
     return data, None
 
 
-
 def _coerce_float(value, default):
     """Coerce a JSON value to float, returning ``(number, error)``.
 
@@ -416,7 +301,6 @@ def _coerce_float(value, default):
         return None, (jsonify({"error": "Numeric value required"}), 400)
 
 
-
 def _coerce_string(value, field_name: str, default: str = ""):
     """Return a trimmed JSON string or a stable field-specific 400 response."""
     if value is None:
@@ -425,11 +309,9 @@ def _coerce_string(value, field_name: str, default: str = ""):
         return None, (jsonify({"error": f"{field_name} must be a string"}), 400)
     return value.strip(), None
 
-
 # ---------------------------------------------------------------------------
 # PROVIDER ENDPOINTS
 # ---------------------------------------------------------------------------
-
 
 @gpu_bp.route('/providers/register', methods=['POST'])
 @require_gpu_api_key
@@ -605,7 +487,6 @@ def provider_stats():
 # JOB ENDPOINTS
 # ---------------------------------------------------------------------------
 
-
 @gpu_bp.route('/jobs/submit', methods=['POST'])
 @require_gpu_api_key
 def submit_job():
@@ -767,9 +648,10 @@ def start_job():
     if row[0] != "claimed":
         return jsonify({"error": f"Job not in claimed state (status: {row[0]})"}), 400
 
-    now = int(time.time())
-    if not _start_gpu_job_transaction(db, provider_id, job_id, now):
-        return jsonify({"error": "Job state changed concurrently or not claimed"}), 409
+    db.execute("""
+        UPDATE gpu_jobs SET status = 'running', started_at = ? WHERE id = ?
+    """, (int(time.time()), job_id))
+    db.commit()
 
     return jsonify({"ok": True, "status": "running"})
 
@@ -826,16 +708,32 @@ def complete_job():
     # Pay for actual time, capped at escrow
     payment = min(duration_mins * price_per_min, row[3])
 
-    if not _complete_gpu_job_transaction(
-        db,
-        job_id=job_id,
-        provider_id=provider_id,
-        now=now,
-        duration_mins=duration_mins,
-        payment=payment,
-        result_url=result_url,
-    ):
+    # Update job with atomic compare-and-set
+    cursor = db.execute("""
+        UPDATE gpu_jobs
+        SET status = 'completed', completed_at = ?, actual_mins = ?, rtc_paid = ?, result_url = ?
+        WHERE id = ? AND provider_id = ? AND status = 'running'
+    """, (now, duration_mins, payment, result_url, job_id, provider_id))
+
+    if cursor.rowcount == 0:
+        db.rollback()
         return jsonify({"error": "Job state changed concurrently or not running"}), 409
+
+    # Update provider stats
+    db.execute("""
+        UPDATE gpu_providers
+        SET status = 'online', total_jobs = total_jobs + 1, total_rtc_earned = total_rtc_earned + ?
+        WHERE id = ?
+    """, (payment, provider_id))
+
+    # Record in history
+    db.execute("""
+        INSERT INTO gpu_job_history (job_id, provider_id, requester_id, job_type, status, rtc_amount, duration_mins, completed_at)
+        SELECT id, provider_id, requester_id, job_type, 'completed', ?, ?, ?
+        FROM gpu_jobs WHERE id = ?
+    """, (payment, duration_mins, now, job_id))
+
+    db.commit()
 
     return jsonify({
         "ok": True,
@@ -887,8 +785,21 @@ def fail_job():
     if row[0] not in ('claimed', 'running'):
         return jsonify({"error": f"Job cannot be released in '{row[0]}' state (must be claimed or running)"}), 400
 
-    if not _release_gpu_job_transaction(db, provider_id, job_id, error_msg):
+    # Release job back to queue with atomic compare-and-set, mark provider available
+    cursor = db.execute("""
+        UPDATE gpu_jobs
+        SET status = 'pending', provider_id = NULL, claimed_at = NULL, started_at = NULL, error_message = ?
+        WHERE id = ? AND provider_id = ? AND status IN ('claimed', 'running')
+    """, (error_msg, job_id, provider_id))
+
+    if cursor.rowcount == 0:
+        db.rollback()
         return jsonify({"error": "Job state changed concurrently or not in active state"}), 409
+
+    db.execute("""
+        UPDATE gpu_providers SET status = 'online' WHERE id = ?
+    """, (provider_id,))
+    db.commit()
 
     return jsonify({"ok": True, "message": "Job released back to queue"})
 
@@ -967,7 +878,6 @@ def list_jobs():
 # MARKETPLACE STATS
 # ---------------------------------------------------------------------------
 
-
 @gpu_bp.route('/stats', methods=['GET'])
 def marketplace_stats():
     """Get overall marketplace statistics."""
@@ -1002,7 +912,9 @@ def marketplace_stats():
 # INIT
 # ---------------------------------------------------------------------------
 
-
 def init_gpu_tables(db_path: str):
-    """Compatibility wrapper used by focused GPU state-machine tests/tools."""
-    init_gpu_db(db_path)
+    """Initialize GPU marketplace tables."""
+    conn = sqlite3.connect(db_path)
+    conn.executescript(GPU_SCHEMA)
+    conn.commit()
+    conn.close()
