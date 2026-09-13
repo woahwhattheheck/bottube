@@ -18,6 +18,7 @@ Endpoints:
 
 RTC debit is atomic and refunds if generation fails.
 """
+import math
 import os
 import sqlite3
 import threading
@@ -57,6 +58,12 @@ def _video_cost(tier, seconds):
 IMAGE_RTC = float(os.environ.get("STUDIO_RTC_IMAGE", "0.5"))
 VOICE_RTC = float(os.environ.get("STUDIO_RTC_VOICE", "0.5"))
 MODEL_RTC = float(os.environ.get("STUDIO_RTC_MODEL", "3"))
+
+
+def _valid_studio_price(cost):
+    """Return True only for finite, non-negative configured RTC charges."""
+    return isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0
+
 
 PROMPT_MAX = 1000
 _rate = {}
@@ -289,6 +296,9 @@ def studio_generate():
         cost = MODEL_RTC
     else:
         return jsonify({"error": "unknown type"}), 400
+
+    if not _valid_studio_price(cost):
+        return jsonify({"error": "studio pricing is misconfigured"}), 503
 
     conn = _conn()
     try:
