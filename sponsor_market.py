@@ -968,10 +968,23 @@ def verify_any(packet: Mapping[str, Any]) -> bool:
         return verify_media_kit(packet)
     if schema == RESERVATION_SCHEMA:
         return verify_reservation_book(packet)
-    if schema in {PROPOSAL_SCHEMA, LIFECYCLE_SCHEMA}:
+    if schema == PROPOSAL_SCHEMA:
         _verify_seal(packet)
         if packet.get("authority") != AUTHORITY_CEILING:
             raise SponsorMarketError("authority_invalid")
+        if packet.get("state") != "DRAFT" or packet.get("owner_approval_is_internal_only") is not True:
+            raise SponsorMarketError("proposal_standalone_boundary_invalid")
+        if packet.get("sponsor_acceptance_proven") is not False or packet.get("payment_proven") is not False:
+            raise SponsorMarketError("proposal_external_authority_escalation")
+        return True
+    if schema == LIFECYCLE_SCHEMA:
+        _verify_seal(packet)
+        if packet.get("authority") != AUTHORITY_CEILING:
+            raise SponsorMarketError("authority_invalid")
+        if packet.get("owner_approval_is_internal_only") is not True:
+            raise SponsorMarketError("lifecycle_standalone_boundary_invalid")
+        if packet.get("sponsor_acceptance_proven") is not False or packet.get("payment_proven") is not False:
+            raise SponsorMarketError("lifecycle_authority_escalation")
         return True
     raise SponsorMarketError("unknown_schema")
 
