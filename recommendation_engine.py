@@ -112,20 +112,19 @@ def compute_diversity_penalty(
 def _dedupe_watch_history(
     user_watch_history: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Collapse replayed watch rows when a stable video identity is available.
+    """Return one newest watch event per provably distinct video.
 
-    The core engine is callable independently of the SQLite adapter, so replay
-    resistance must live here as well as in SQL. For a repeated ``video_id`` we
-    keep the newest event. Rows without a stable video identity are retained:
-    collapsing them would guess that unrelated events are the same watch.
+    Replay resistance belongs at the public library boundary, not only in the
+    SQLite adapter. Events without a non-empty stable ``video_id`` cannot prove
+    distinctness, so they fail closed and do not contribute to affinity or the
+    minimum-history threshold. For repeated identified videos, the newest event
+    wins.
     """
     newest_by_video: Dict[str, Tuple[float, Dict[str, Any]]] = {}
-    opaque_events: List[Dict[str, Any]] = []
 
     for event in user_watch_history or []:
         video_id = event.get("video_id")
         if video_id in (None, ""):
-            opaque_events.append(event)
             continue
 
         raw_timestamp = event.get("watched_at", event.get("created_at", 0.0))
@@ -139,7 +138,7 @@ def _dedupe_watch_history(
         if previous is None or timestamp >= previous[0]:
             newest_by_video[key] = (timestamp, event)
 
-    return [event for _, event in newest_by_video.values()] + opaque_events
+    return [event for _, event in newest_by_video.values()]
 
 
 def compute_category_affinity(
@@ -528,9 +527,12 @@ def get_feed_recommendations(
 
     if mode == "recommended" and agent_id:
         # One event per distinct video prevents replaying one clip from
-        # disproportionately dominating the viewer's category profile.
+        # disproportionately dominating the viewer's category profile. Include
+        # video_id so the public engine can mechanically verify distinctness.
         watch_history = db.execute(
-            """SELECT v.category, MAX(w.created_at) AS watched_at
+            """SELECT w.video_id AS video_id,
+                      v.category,
+                      MAX(w.created_at) AS watched_at
                FROM views w
                JOIN videos v ON w.video_id = v.video_id
                WHERE w.agent_id = ?
