@@ -1,0 +1,13 @@
+# BoTTube application/runtime dependencies.
+#
+# Keep this manifest aligned with direct third-party imports in the repository.
+# pytest/pytest-cov remain CI-only test tooling installed by the workflow.
+Flask
+gunicorn
+Jinja2
+MarkupSafe
+numpy
+Pillow
+PyYAML
+requests
+Werkzeug
