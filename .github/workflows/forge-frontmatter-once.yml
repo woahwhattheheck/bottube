@@ -1,0 +1,114 @@
+name: Apply exact BoTTube skill frontmatter repair
+
+on:
+  push:
+    branches:
+      - forge-z/bottube-skill-frontmatter-yaml-20260913
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: ${{ !contains(github.event.head_commit.message, '[frontmatter-repair-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: forge-z/bottube-skill-frontmatter-yaml-20260913
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply byte-exact metadata repair and regression
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import base64
+          import hashlib
+          from pathlib import Path
+
+          skill_path = Path("skills/bottube/SKILL.md")
+          original = skill_path.read_bytes()
+
+          def git_blob_sha(data: bytes) -> str:
+              header = b"blob " + str(len(data)).encode("ascii") + b"\0"
+              return hashlib.sha1(header + data).hexdigest()
+
+          expected_original = "34cccbdc58482598c525ac58060b4848567bfa88"
+          expected_fixed = "1252ea2a7d56482b3059362eb596c8f9828a15f7"
+          if git_blob_sha(original) != expected_original:
+              raise SystemExit(
+                  "SKILL.md preimage changed: "
+                  f"expected {expected_original}, got {git_blob_sha(original)}"
+              )
+
+          env_tail = (
+              b"  BOTTUBE_BASE_URL:\r\n"
+              b"    description: BoTTube server URL\r\n"
+              b"    default: https://bottube.ai\r\n"
+              b"tools:\r\n"
+          )
+          repaired_env_tail = (
+              b"  BOTTUBE_BASE_URL:\r\n"
+              b"    description: BoTTube server URL\r\n"
+              b"    default: https://bottube.ai\r\n"
+              b"  MESHY_API_KEY:\r\n"
+              b"    description: Meshy.ai API key for 3D model generation "
+              b"(optional, for 3D-to-video pipeline)\r\n"
+              b"    required: false\r\n"
+              b"tools:\r\n"
+          )
+          misplaced = (
+              b"  - bottube_meshy_3d_pipeline\r\n"
+              b"  MESHY_API_KEY:\r\n"
+              b"    description: Meshy.ai API key for 3D model generation "
+              b"(optional, for 3D-to-video pipeline)\r\n"
+              b"    required: false\r\n"
+          )
+          tool_tail = b"  - bottube_meshy_3d_pipeline\r\n"
+
+          if original.count(env_tail) != 1 or original.count(misplaced) != 1:
+              raise SystemExit("SKILL.md frontmatter preimage is not unique")
+          fixed = original.replace(env_tail, repaired_env_tail, 1).replace(
+              misplaced, tool_tail, 1
+          )
+          if len(fixed) != len(original):
+              raise SystemExit("metadata relocation changed file length")
+          if fixed.count(b"\n") != fixed.count(b"\r\n"):
+              raise SystemExit("metadata relocation changed CRLF discipline")
+          if original.split(b"---\r\n", 2)[2] != fixed.split(b"---\r\n", 2)[2]:
+              raise SystemExit("metadata relocation changed the Markdown body")
+          if git_blob_sha(fixed) != expected_fixed:
+              raise SystemExit(
+                  f"unexpected repaired blob: {git_blob_sha(fixed)}"
+              )
+          skill_path.write_bytes(fixed)
+
+          test_data = base64.b64decode(
+              "ZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9ucwoKaW1wb3J0IHVuaXR0ZXN0CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKaW1wb3J0IHlhbWwKCgpST09UID0gUGF0aChfX2ZpbGVfXykucmVzb2x2ZSgpLnBhcmVudHNbMV0KU0tJTEwgPSBST09UIC8gInNraWxscyIgLyAiYm90dHViZSIgLyAiU0tJTEwubWQiCkVYUEVDVEVEX1RPT0xTID0gWwogICAgImJvdHR1YmVfYnJvd3NlIiwKICAgICJib3R0dWJlX3NlYXJjaCIsCiAgICAiYm90dHViZV91cGxvYWQiLAogICAgImJvdHR1YmVfY29tbWVudCIsCiAgICAiYm90dHViZV9yZWFkX2NvbW1lbnRzIiwKICAgICJib3R0dWJlX3ZvdGUiLAogICAgImJvdHR1YmVfYWdlbnRfcHJvZmlsZSIsCiAgICAiYm90dHViZV9wcmVwYXJlX3ZpZGVvIiwKICAgICJib3R0dWJlX2dlbmVyYXRlX3ZpZGVvIiwKICAgICJib3R0dWJlX21lc2h5XzNkX3BpcGVsaW5lIiwKXQoKCmNsYXNzIEJvVFR1YmVTa2lsbEZyb250bWF0dGVyVGVzdHModW5pdHRlc3QuVGVzdENhc2UpOgogICAgZGVmIHRlc3RfZnJvbnRtYXR0ZXJfaXNfdmFsaWRfYW5kX2tlZXBzX2Vudl9zZXBhcmF0ZV9mcm9tX3Rvb2xzKHNlbGYpIC0+IE5vbmU6CiAgICAgICAgbGluZXMgPSBTS0lMTC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04Iikuc3BsaXRsaW5lcygpCiAgICAgICAgc2VsZi5hc3NlcnRHcmVhdGVyRXF1YWwobGVuKGxpbmVzKSwgMykKICAgICAgICBzZWxmLmFzc2VydEVxdWFsKGxpbmVzWzBdLCAiLS0tIikKICAgICAgICBzZWxmLmFzc2VydEluKCItLS0iLCBsaW5lc1sxOl0pCiAgICAgICAgY2xvc2luZyA9IGxpbmVzLmluZGV4KCItLS0iLCAxKQoKICAgICAgICBtZXRhZGF0YSA9IHlhbWwuc2FmZV9sb2FkKCJcbiIuam9pbihsaW5lc1sxOmNsb3NpbmddKSkKCiAgICAgICAgc2VsZi5hc3NlcnRJc0luc3RhbmNlKG1ldGFkYXRhLCBkaWN0KQogICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwobWV0YWRhdGFbInRvb2xzIl0sIEVYUEVDVEVEX1RPT0xTKQogICAgICAgIHNlbGYuYXNzZXJ0VHJ1ZShhbGwodHlwZSh0b29sKSBpcyBzdHIgZm9yIHRvb2wgaW4gbWV0YWRhdGFbInRvb2xzIl0pKQogICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwoCiAgICAgICAgICAgIG1ldGFkYXRhWyJlbnYiXVsiTUVTSFlfQVBJX0tFWSJdLAogICAgICAgICAgICB7CiAgICAgICAgICAgICAgICAiZGVzY3JpcHRpb24iOiAoCiAgICAgICAgICAgICAgICAgICAgIk1lc2h5LmFpIEFQSSBrZXkgZm9yIDNEIG1vZGVsIGdlbmVyYXRpb24gIgogICAgICAgICAgICAgICAgICAgICIob3B0aW9uYWwsIGZvciAzRC10by12aWRlbyBwaXBlbGluZSkiCiAgICAgICAgICAgICAgICApLAogICAgICAgICAgICAgICAgInJlcXVpcmVkIjogRmFsc2UsCiAgICAgICAgICAgIH0sCiAgICAgICAgKQogICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwobGluZXNbY2xvc2luZyArIDJdLCAiIyBCb1RUdWJlIFNraWxsIikKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgdW5pdHRlc3QubWFpbigpCg=="
+          )
+          if git_blob_sha(test_data) != "4e79ec322d61b7b5a23eb6250e99b1203385651e":
+              raise SystemExit("embedded regression blob changed")
+          Path("tests/test_bottube_skill_frontmatter.py").write_bytes(test_data)
+          PY
+      - name: Validate frontmatter regression
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML
+          python -m unittest discover -s tests -p 'test_bottube_skill_frontmatter.py' -v
+          python -m py_compile tests/test_bottube_skill_frontmatter.py
+          git diff --check
+      - name: Commit final two-path tree
+        shell: bash
+        run: |
+          rm .github/workflows/forge-frontmatter-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = ".github/workflows/forge-frontmatter-once.yml skills/bottube/SKILL.md tests/test_bottube_skill_frontmatter.py "
+          git commit -m "fix(skill): repair invalid BoTTube frontmatter [frontmatter-repair-applied]"
+          git push origin HEAD:forge-z/bottube-skill-frontmatter-yaml-20260913
