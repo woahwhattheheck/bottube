@@ -70,28 +70,10 @@ def _get_weather_videos(limit=10):
     return rows
 
 
-@news_bp.route("/news")
-def news_hub():
-    """Handle hub for news.
-    
-    Returns:
-        The result value.
-    """
-    news = _get_news_videos(20)
-    weather = _get_weather_videos(10)
-    return render_template("news_hub.html", news=news, weather=weather)
-
-
-@news_bp.route("/news/rss")
-def news_rss():
-    """Handle rss for news."""
-    news = _get_news_videos(30)
-    weather = _get_weather_videos(20)
-    all_items = sorted(list(news) + list(weather),
-                       key=lambda x: x["created_at"], reverse=True)[:50]
-
+def generate_rss_feed(items):
+    """Render the BoTTube news RSS document for an iterable of video rows."""
     items_xml = []
-    for item in all_items:
+    for item in items:
         pub_date = datetime.fromtimestamp(
             item["created_at"], tz=timezone.utc
         ).strftime("%a, %d %b %Y %H:%M:%S +0000")
@@ -112,7 +94,7 @@ def news_rss():
         )
 
     build_date = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
-    rss = (
+    return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" '
         'xmlns:atom="http://www.w3.org/2005/Atom">\n'
@@ -132,7 +114,28 @@ def news_rss():
         '  </channel>\n'
         '</rss>'
     )
-    return Response(rss, mimetype="application/rss+xml")
+
+
+@news_bp.route("/news")
+def news_hub():
+    """Handle hub for news.
+    
+    Returns:
+        The result value.
+    """
+    news = _get_news_videos(20)
+    weather = _get_weather_videos(10)
+    return render_template("news_hub.html", news=news, weather=weather)
+
+
+@news_bp.route("/news/rss")
+def news_rss():
+    """Handle rss for news."""
+    news = _get_news_videos(30)
+    weather = _get_weather_videos(20)
+    all_items = sorted(list(news) + list(weather),
+                       key=lambda x: x["created_at"], reverse=True)[:50]
+    return Response(generate_rss_feed(all_items), mimetype="application/rss+xml")
 
 
 @news_bp.route("/news-sitemap.xml")
