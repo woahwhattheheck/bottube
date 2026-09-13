@@ -175,6 +175,89 @@ def _claim_gpu_job_transaction(db, provider_id: str, agent_id: int, job_id: str,
     db.commit()
     return "claimed"
 
+
+def _start_gpu_job_transaction(db, provider_id: str, job_id: str, now: int) -> bool:
+    """Atomically transition one provider-owned claimed job to running."""
+    cursor = db.execute(
+        """
+        UPDATE gpu_jobs
+        SET status = 'running', started_at = ?
+        WHERE id = ? AND provider_id = ? AND status = 'claimed'
+        """,
+        (now, job_id, provider_id),
+    )
+    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+        db.rollback()
+        return False
+    db.commit()
+    return True
+
+
+def _complete_gpu_job_transaction(
+    db,
+    *,
+    job_id: str,
+    provider_id: str,
+    now: int,
+    duration_mins: float,
+    payment: float,
+    result_url: str,
+) -> bool:
+    """Atomically complete one running job and credit its provider exactly once."""
+    cursor = db.execute(
+        """
+        UPDATE gpu_jobs
+        SET status = 'completed', completed_at = ?, actual_mins = ?, rtc_paid = ?, result_url = ?
+        WHERE id = ? AND provider_id = ? AND status = 'running'
+        """,
+        (now, duration_mins, payment, result_url, job_id, provider_id),
+    )
+    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+        db.rollback()
+        return False
+
+    db.execute(
+        """
+        UPDATE gpu_providers
+        SET status = 'online', total_jobs = total_jobs + 1, total_rtc_earned = total_rtc_earned + ?
+        WHERE id = ?
+        """,
+        (payment, provider_id),
+    )
+    db.execute(
+        """
+        INSERT INTO gpu_job_history (job_id, provider_id, requester_id, job_type, status, rtc_amount, duration_mins, completed_at)
+        SELECT id, provider_id, requester_id, job_type, 'completed', ?, ?, ?
+        FROM gpu_jobs WHERE id = ?
+        """,
+        (payment, duration_mins, now, job_id),
+    )
+    db.commit()
+    return True
+
+
+def _release_gpu_job_transaction(db, provider_id: str, job_id: str, error_message: str) -> bool:
+    """Atomically release one active provider job back to the pending queue."""
+    cursor = db.execute(
+        """
+        UPDATE gpu_jobs
+        SET status = 'pending', provider_id = NULL, claimed_at = NULL, started_at = NULL, error_message = ?
+        WHERE id = ? AND provider_id = ? AND status IN ('claimed', 'running')
+        """,
+        (error_message, job_id, provider_id),
+    )
+    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+        db.rollback()
+        return False
+
+    db.execute(
+        "UPDATE gpu_providers SET status = 'online' WHERE id = ?",
+        (provider_id,),
+    )
+    db.commit()
+    return True
+
+
 def get_db():
     """Get database connection from Flask g context."""
     if not hasattr(g, 'db') or g.db is None:
@@ -648,10 +731,8 @@ def start_job():
     if row[0] != "claimed":
         return jsonify({"error": f"Job not in claimed state (status: {row[0]})"}), 400
 
-    db.execute("""
-        UPDATE gpu_jobs SET status = 'running', started_at = ? WHERE id = ?
-    """, (int(time.time()), job_id))
-    db.commit()
+    if not _start_gpu_job_transaction(db, provider_id, job_id, int(time.time())):
+        return jsonify({"error": "Job state changed concurrently or not claimed"}), 409
 
     return jsonify({"ok": True, "status": "running"})
 
@@ -708,32 +789,16 @@ def complete_job():
     # Pay for actual time, capped at escrow
     payment = min(duration_mins * price_per_min, row[3])
 
-    # Update job with atomic compare-and-set
-    cursor = db.execute("""
-        UPDATE gpu_jobs
-        SET status = 'completed', completed_at = ?, actual_mins = ?, rtc_paid = ?, result_url = ?
-        WHERE id = ? AND provider_id = ? AND status = 'running'
-    """, (now, duration_mins, payment, result_url, job_id, provider_id))
-
-    if cursor.rowcount == 0:
-        db.rollback()
+    if not _complete_gpu_job_transaction(
+        db,
+        job_id=job_id,
+        provider_id=provider_id,
+        now=now,
+        duration_mins=duration_mins,
+        payment=payment,
+        result_url=result_url,
+    ):
         return jsonify({"error": "Job state changed concurrently or not running"}), 409
-
-    # Update provider stats
-    db.execute("""
-        UPDATE gpu_providers
-        SET status = 'online', total_jobs = total_jobs + 1, total_rtc_earned = total_rtc_earned + ?
-        WHERE id = ?
-    """, (payment, provider_id))
-
-    # Record in history
-    db.execute("""
-        INSERT INTO gpu_job_history (job_id, provider_id, requester_id, job_type, status, rtc_amount, duration_mins, completed_at)
-        SELECT id, provider_id, requester_id, job_type, 'completed', ?, ?, ?
-        FROM gpu_jobs WHERE id = ?
-    """, (payment, duration_mins, now, job_id))
-
-    db.commit()
 
     return jsonify({
         "ok": True,
@@ -785,21 +850,8 @@ def fail_job():
     if row[0] not in ('claimed', 'running'):
         return jsonify({"error": f"Job cannot be released in '{row[0]}' state (must be claimed or running)"}), 400
 
-    # Release job back to queue with atomic compare-and-set, mark provider available
-    cursor = db.execute("""
-        UPDATE gpu_jobs
-        SET status = 'pending', provider_id = NULL, claimed_at = NULL, started_at = NULL, error_message = ?
-        WHERE id = ? AND provider_id = ? AND status IN ('claimed', 'running')
-    """, (error_msg, job_id, provider_id))
-
-    if cursor.rowcount == 0:
-        db.rollback()
+    if not _release_gpu_job_transaction(db, provider_id, job_id, error_msg):
         return jsonify({"error": "Job state changed concurrently or not in active state"}), 409
-
-    db.execute("""
-        UPDATE gpu_providers SET status = 'online' WHERE id = ?
-    """, (provider_id,))
-    db.commit()
 
     return jsonify({"ok": True, "message": "Job released back to queue"})
 

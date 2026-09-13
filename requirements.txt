@@ -1,5 +1,14 @@
-# Runtime/test imports exercised by the repository's Python suite.
+# BoTTube application/runtime dependencies.
+#
+# Keep this manifest aligned with direct third-party imports in the repository.
+# pytest/pytest-cov remain CI-only test tooling installed by the workflow.
 Flask
-requests
-PyYAML
+gunicorn
+Jinja2
+MarkupSafe
 numpy
+Pillow
+PyNaCl
+PyYAML
+requests
+Werkzeug
