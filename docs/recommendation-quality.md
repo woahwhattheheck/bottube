@@ -24,11 +24,15 @@ Recommended records carry two additive fields:
 
 Current reason identifiers are `trending_now`, `fresh_upload`, `strong_engagement`, `matches_watch_history`, and `balanced_recommendation`.
 
+The public personalized-feed serializer starts from the ranked record and therefore preserves both structured fields. The legacy `_why: "Personalized"` value remains as a coarse backwards-compatible label; consumers that need explainability should use `recommend_reasons` and `recommend_signals`.
+
 These explanations do **not** include raw watch-history events, watched video IDs, or another user's private history. `matches_watch_history` only states that the aggregate category-affinity signal was strong enough to matter.
 
 ## Replay resistance
 
-Category affinity counts each distinct watched video once, using the most recent watch timestamp for that video. Replaying one clip repeatedly therefore cannot crowd the 50-item preference window and manufacture a category preference.
+Category affinity counts each distinct watched video once, using the most recent watch timestamp for that video. This invariant is enforced inside the core recommendation library, not only by the SQLite feed adapter, so direct callers receive the same replay-resistant semantics. Replaying one clip repeatedly therefore cannot satisfy the minimum-history threshold, crowd the preference window, or manufacture a category preference.
+
+Watch-history events without a stable `video_id` are retained rather than guessed to be duplicates.
 
 ## Diagnostics
 
@@ -53,5 +57,7 @@ The recommended feed evaluates a wider bounded pool than the final page (`8x` th
 - `diversity_weight` is functional and the default remains backward-compatible;
 - recommendation annotations do not mutate caller-owned candidate dictionaries;
 - explanation fields contain aggregate signals rather than raw watch history;
+- the serializer used by the personalized feed preserves structured explanation fields;
 - diagnostics report creator concentration and reason frequencies;
-- replaying one video cannot overpower multiple distinct watches in affinity ranking.
+- the core engine collapses replayed `video_id` events before affinity thresholds/scoring;
+- SQLite-adapter replay protection remains intact.

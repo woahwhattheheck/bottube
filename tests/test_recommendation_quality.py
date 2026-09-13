@@ -115,6 +115,109 @@ def test_affinity_reason_does_not_disclose_watch_history_details():
     }
 
 
+def test_personalized_feed_serializer_preserves_structured_explanations(app):
+    """The serializer used by /api/feed must not erase ranking diagnostics."""
+    import bottube_server
+
+    ranked = _video("explained-feed-item", agent_id=2, category="music")
+    ranked.update(
+        {
+            "tags": "[]",
+            "thumbnail": "",
+            "recommend_score": 3.25,
+            "recommend_signals": {
+                "freshness": 1.0,
+                "category_affinity": 0.75,
+            },
+            "recommend_reasons": ["fresh_upload", "matches_watch_history"],
+        }
+    )
+
+    with app.app_context():
+        serialized = bottube_server.video_to_dict(ranked)
+
+    assert serialized["recommend_score"] == 3.25
+    assert serialized["recommend_signals"] == {
+        "freshness": 1.0,
+        "category_affinity": 0.75,
+    }
+    assert serialized["recommend_reasons"] == [
+        "fresh_upload",
+        "matches_watch_history",
+    ]
+
+
+def test_direct_engine_replay_cannot_manufacture_minimum_history_threshold():
+    candidates = [
+        _video("candidate-music", agent_id=2, category="music"),
+        _video("candidate-education", agent_id=3, category="education"),
+    ]
+    replayed_history = [
+        {
+            "video_id": "same-watched-video",
+            "category": "music",
+            "watched_at": NOW - i,
+        }
+        for i in range(20)
+    ]
+
+    recommendations = RecommendationEngine().recommend(
+        candidates,
+        limit=2,
+        user_watch_history=replayed_history,
+        now=NOW,
+    )
+
+    assert {
+        item["recommend_signals"]["category_affinity"]
+        for item in recommendations
+    } == {0.5}
+
+
+def test_direct_engine_replay_matches_distinct_history_baseline():
+    candidates = [
+        _video("candidate-music", agent_id=2, category="music"),
+        _video("candidate-education", agent_id=3, category="education"),
+    ]
+    distinct_history = [
+        {"video_id": "music-1", "category": "music", "watched_at": NOW},
+        {"video_id": "education-1", "category": "education", "watched_at": NOW - 60},
+        {"video_id": "education-2", "category": "education", "watched_at": NOW - 120},
+    ]
+    replayed_history = distinct_history + [
+        {
+            "video_id": "music-1",
+            "category": "music",
+            "watched_at": NOW - 600 - i,
+        }
+        for i in range(25)
+    ]
+
+    engine = RecommendationEngine()
+    baseline = engine.recommend(
+        candidates,
+        limit=2,
+        user_watch_history=distinct_history,
+        now=NOW,
+    )
+    replayed = engine.recommend(
+        candidates,
+        limit=2,
+        user_watch_history=replayed_history,
+        now=NOW,
+    )
+
+    baseline_affinity = {
+        item["video_id"]: item["recommend_signals"]["category_affinity"]
+        for item in baseline
+    }
+    replayed_affinity = {
+        item["video_id"]: item["recommend_signals"]["category_affinity"]
+        for item in replayed
+    }
+    assert replayed_affinity == baseline_affinity
+
+
 def test_recommendation_diagnostics_report_concentration_and_reasons():
     diagnostics = recommendation_diagnostics(
         [

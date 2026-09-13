@@ -109,6 +109,39 @@ def compute_diversity_penalty(
     return agent_penalty * category_penalty
 
 
+def _dedupe_watch_history(
+    user_watch_history: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Collapse replayed watch rows when a stable video identity is available.
+
+    The core engine is callable independently of the SQLite adapter, so replay
+    resistance must live here as well as in SQL. For a repeated ``video_id`` we
+    keep the newest event. Rows without a stable video identity are retained:
+    collapsing them would guess that unrelated events are the same watch.
+    """
+    newest_by_video: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+    opaque_events: List[Dict[str, Any]] = []
+
+    for event in user_watch_history or []:
+        video_id = event.get("video_id")
+        if video_id in (None, ""):
+            opaque_events.append(event)
+            continue
+
+        raw_timestamp = event.get("watched_at", event.get("created_at", 0.0))
+        try:
+            timestamp = float(raw_timestamp)
+        except (TypeError, ValueError):
+            timestamp = 0.0
+
+        key = str(video_id)
+        previous = newest_by_video.get(key)
+        if previous is None or timestamp >= previous[0]:
+            newest_by_video[key] = (timestamp, event)
+
+    return [event for _, event in newest_by_video.values()] + opaque_events
+
+
 def compute_category_affinity(
     user_watch_history: List[Dict[str, Any]],
     category: str,
@@ -118,14 +151,18 @@ def compute_category_affinity(
     if now is None:
         now = time.time()
 
-    if len(user_watch_history) < CATEGORY_AFFINITY_MIN_VIDEOS:
+    # Enforce replay resistance at the library boundary. Callers that bypass
+    # the SQLite adapter must receive the same distinct-video semantics.
+    watch_history = _dedupe_watch_history(user_watch_history)
+
+    if len(watch_history) < CATEGORY_AFFINITY_MIN_VIDEOS:
         return 0.5
 
     category_score = 0.0
     total_weight = 0.0
     decay_seconds = CATEGORY_AFFINITY_DECAY_DAYS * 24 * 3600
 
-    for video in user_watch_history:
+    for video in watch_history:
         video_category = video.get("category", "other")
         watched_at = video.get("watched_at", video.get("created_at", now))
 
