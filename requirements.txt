@@ -1,5 +1,10 @@
-# Runtime/test imports exercised by the repository's Python suite.
+# Direct Python runtime and deployment dependencies.
 Flask
-requests
-PyYAML
+Gunicorn
+Jinja2
+MarkupSafe
 numpy
+Pillow
+PyYAML
+requests
+Werkzeug
