@@ -115,3 +115,24 @@ def test_bottube_x402_coinbase_wallet_requires_api_key(tmp_path):
     body = resp.get_json()
     assert body is not None
     assert "error" in body
+
+
+def test_bottube_x402_coinbase_wallet_rejects_malformed_json(tmp_path):
+    app = _fresh_app(tmp_path)
+    client = app.test_client()
+    headers = {"Authorization": "Bearer secret"}
+
+    cases = [
+        ("not-object", "JSON object required"),
+        (["not", "object"], "JSON object required"),
+        ({"coinbase_address": ["0x123"]}, "coinbase_address must be a string"),
+    ]
+
+    for payload, expected_error in cases:
+        resp = client.post(
+            "/api/agents/me/coinbase-wallet",
+            json=payload,
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": expected_error}
