@@ -5,6 +5,7 @@ wired into production. They exercise server-derived identity rather than
 trusting event payload fields.
 """
 from contextlib import closing
+from types import SimpleNamespace
 import json
 import sqlite3
 
@@ -293,3 +294,101 @@ def test_allowed_polling_client_authenticates_and_writes(
             "SELECT user_id, username, message FROM chat_messages"
         ).fetchone()
         assert dict(row) == {"user_id": 1, "username": "alice", "message": "hello"}
+
+
+def test_room_alias_cannot_bypass_existing_ban(tmp_path):
+    app, db_path = _make_app(tmp_path)
+    owner = websocket_server.socketio.test_client(
+        app, headers={"X-API-Key": "alice-key"}
+    )
+    banned = websocket_server.socketio.test_client(
+        app, headers={"X-API-Key": "bob-key"}
+    )
+    owner.emit(
+        "mod_action",
+        {"action": "ban", "video_id": "video-a", "target_user_id": 2},
+    )
+    banned.emit(
+        "chat_message", {"video_id": " video-a ", "message": "blocked user"}
+    )
+    with closing(_db(db_path)) as db:
+        assert db.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0] == 0
+    assert any(
+        packet["name"] == "error"
+        and packet["args"][0]["message"] == "You are banned from this chat."
+        for packet in banned.get_received()
+    )
+
+
+def test_room_alias_joins_messages_and_leaves_canonical_room(tmp_path):
+    app, db_path = _make_app(tmp_path)
+    observer = websocket_server.socketio.test_client(
+        app, headers={"X-API-Key": "alice-key"}
+    )
+    sender = websocket_server.socketio.test_client(
+        app, headers={"X-API-Key": "bob-key"}
+    )
+    observer.emit("join", {"video_id": "video-a"})
+    observer.get_received()
+    sender.get_received()
+    padded_id = " \tvideo-a\n "
+    sender.emit("join", {"video_id": padded_id})
+    assert any(
+        p["name"] == "system" and p["args"][0]["message"] == "bob joined the chat"
+        for p in observer.get_received()
+    )
+    sender.get_received()
+    sender.emit("chat_message", {"video_id": padded_id, "message": "hello"})
+    for client in (observer, sender):
+        assert any(
+            p["name"] == "new_message" and p["args"][0]["message"] == "hello"
+            for p in client.get_received()
+        )
+    with closing(_db(db_path)) as db:
+        row = db.execute("SELECT video_id, user_id FROM chat_messages").fetchone()
+        assert dict(row) == {"video_id": "video-a", "user_id": 2}
+
+    sender.emit("leave", {"video_id": padded_id})
+    assert any(
+        p["name"] == "system" and p["args"][0]["message"] == "bob left the chat"
+        for p in observer.get_received()
+    )
+    observer.emit("chat_message", {"video_id": "video-a", "message": "after leave"})
+    assert not any(p["name"] == "new_message" for p in sender.get_received())
+
+
+def test_room_alias_owner_moderation_keeps_canonical_scope(tmp_path):
+    app, db_path = _make_app(tmp_path)
+    owner = websocket_server.socketio.test_client(
+        app, headers={"X-API-Key": "alice-key"}
+    )
+    owner.emit(
+        "mod_action",
+        {"action": "ban", "video_id": " video-a ", "target_user_id": 2},
+    )
+    with closing(_db(db_path)) as db:
+        row = db.execute("SELECT video_id, user_id, banned_by FROM chat_bans").fetchone()
+        assert row is not None
+        assert dict(row) == {
+            "video_id": "video-a", "user_id": 2, "banned_by": "alice"
+        }
+
+
+def test_room_alias_shares_message_budget(tmp_path, monkeypatch):
+    app, db_path = _make_app(tmp_path)
+    monkeypatch.setattr(websocket_server, "time", SimpleNamespace(time=lambda: 1000.0))
+    sender = websocket_server.socketio.test_client(
+        app, headers={"X-API-Key": "bob-key"}
+    )
+    sender.emit("chat_message", {"video_id": " video-a ", "message": "first"})
+    sender.emit("chat_message", {"video_id": "video-a", "message": "second"})
+    with closing(_db(db_path)) as db:
+        rows = db.execute("SELECT video_id, message FROM chat_messages").fetchall()
+        assert [dict(row) for row in rows] == [
+            {"video_id": "video-a", "message": "first"}
+        ]
+    assert any(
+        packet["name"] == "error"
+        and packet["args"][0]["message"] == "Slow down! Wait 2 seconds between messages."
+        for packet in sender.get_received()
+    )

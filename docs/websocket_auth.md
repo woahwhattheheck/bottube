@@ -43,6 +43,13 @@ depend on a browser withholding cookies from an untrusted origin.
 
 ## Moderation
 
+Every room-bearing event trims surrounding whitespace from `video_id` once at
+the handler boundary. That same canonical value is used for room membership,
+message storage and broadcasts, creator authorization, bans and the message
+cooldown. Alternate whitespace spellings do not create separate chat rooms or
+moderation/rate-limit scopes. Non-string, empty and missing video IDs remain
+invalid. Already-canonical video IDs retain their existing behavior.
+
 mod_action is authorized when the authenticated agent owns the target video.
 An authenticated agent may also present X-Admin-Key matching the same admin
 secret supplied to init_socketio through admin_key, configured as

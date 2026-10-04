@@ -69,6 +69,12 @@ def _coerce_flag(value):
     return None
 
 
+def _event_video_id(data):
+    """Use one video id for existence checks, rooms, storage and moderation."""
+    value = data.get("video_id", "")
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _coerce_non_negative_number(value, default=0.0):
     """Return finite non-negative float or None when invalid."""
     if value is None:
@@ -253,7 +259,7 @@ def on_join(data):
     data = _event_object(data)
     if data is None:
         return
-    room = data.get("video_id", "")
+    room = _event_video_id(data)
     db = _get_db(current_app)
     try:
         if not _video_exists(db, room):
@@ -284,7 +290,7 @@ def on_leave(data):
     data = _event_object(data)
     if data is None:
         return
-    room = data.get("video_id", "")
+    room = _event_video_id(data)
     if not _require_video(current_app, room):
         return
     leave_room(room)
@@ -310,7 +316,7 @@ def on_chat_message(data):
     if data is None:
         return
 
-    room = data.get("video_id", "")
+    room = _event_video_id(data)
     user_id = identity["id"]
     username = identity["username"]
     raw_message = data.get("message", "")
@@ -425,7 +431,7 @@ def on_mod_action(data):
         return
 
     action = data.get("action")
-    room = data.get("video_id", "")
+    room = _event_video_id(data)
     if not _require_video(current_app, room):
         return
     if not _can_moderate(current_app, room, identity):
